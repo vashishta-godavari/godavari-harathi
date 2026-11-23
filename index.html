@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="te">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>గోదావరి హారతి – హాజరు కార్డ్ / Attendee Card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;700&family=Noto+Sans:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FDF3DC; --ink:#3b1d0c; --brown:#8B3A12; --rust:#B5500F; --gold:#D9A94F; --soft:#F2DDB8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#f6e9cc;color:var(--ink);font-family:'Noto Sans Telugu','Noto Sans',system-ui,sans-serif;line-height:1.5}
+  .wrap{max-width:480px;margin:0 auto;padding:16px}
+  header{background:linear-gradient(#3E2314,#8B3A12);color:#F4E4C8;text-align:center;padding:22px 16px;border-radius:20px 20px 0 0}
+  header h1{margin:0 0 4px;font-size:1.35rem;font-weight:700}
+  header p{margin:0;color:#F0C27A}
+  form,.result{background:var(--bg);border:1px solid var(--gold);border-top:0;border-radius:0 0 20px 20px;padding:20px}
+  label{display:block;font-weight:700;color:var(--brown);margin:14px 0 4px}
+  label small{font-weight:400;color:#7a5a40}
+  input[type=text],input[type=tel]{width:100%;padding:12px;font:inherit;border:1px solid var(--gold);border-radius:10px;background:#fff;color:var(--ink)}
+  input:focus,button:focus-visible{outline:3px solid #e9a23b;outline-offset:1px}
+  .photo-row{display:flex;gap:14px;align-items:center}
+  .thumb{width:84px;height:99px;flex:none;border:1px solid var(--gold);border-radius:12px;background:var(--soft);overflow:hidden;display:grid;place-items:center;color:#7a5a40;font-size:.75rem}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:14px 18px;cursor:pointer;width:100%;margin-top:20px;background:var(--brown);color:#fff}
+  button.secondary{background:transparent;color:var(--brown);border:1px solid var(--brown);margin-top:10px}
+  button:disabled{opacity:.6;cursor:wait}
+  .msg{margin-top:14px;padding:10px 12px;border-radius:10px;font-size:.92rem}
+  .msg.err{background:#fde4e0;color:#8a1c10}
+  .msg.info{background:#fff0c9;color:#6b4a00}
+  .result{display:none;text-align:center}
+  .result img{width:100%;max-width:340px;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>సహస్ర గళ హనుమాన్ చాలీసా పారాయణం</h1>
+    <p>08 డిసెంబర్ 2026 · Register &amp; download your card</p>
+  </header>
+
+  <form id="form" novalidate>
+    <label for="name">పేరు <small>/ Name</small></label>
+    <input id="name" type="text" maxlength="80" autocomplete="name" required>
+
+    <label for="phone">ఫోన్ నంబర్ <small>/ Phone (10 digits)</small></label>
+    <input id="phone" type="tel" inputmode="numeric" maxlength="10" autocomplete="tel-national" required>
+
+    <label for="village">గ్రామం <small>/ Village</small></label>
+    <input id="village" type="text" maxlength="80" required>
+
+    <label for="photo">ఫోటో <small>/ Photo</small></label>
+    <div class="photo-row">
+      <div class="thumb" id="thumb">PHOTO</div>
+      <input id="photo" type="file" accept="image/*" required>
+    </div>
+
+    <div id="msg" class="msg" hidden></div>
+    <button id="submit" type="submit">Register &amp; download card</button>
+  </form>
+
+  <section class="result" id="result" aria-live="polite">
+    <p><strong>మీ కార్డ్ సిద్ధంగా ఉంది!</strong><br>Your card is ready. If the download did not start, use the button below.</p>
+    <img id="cardImg" alt="Attendee card">
+    <button id="dl" type="button">Download card (JPEG)</button>
+    <button id="again" class="secondary" type="button">Register another person</button>
+  </section>
+</div>
+
+<script>
+/* ===================== CONFIGURE THESE ===================== */
+const CONFIG = {
+  SUPABASE_URL: 'https://rcenvpfhortcbsrbbbnh.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_iXFxB-wqfb2rltLE85JqSg_jON81YCY',
+  BUCKET: 'attendee-photos',
+  EVENT_DATE: '08 డిసెంబర్ 2026'
+};
+/* =========================================================== */
+
+/* Keep-alive: every page load sends a tiny request so the free Supabase project stays active */
+fetch(CONFIG.SUPABASE_URL + '/rest/v1/rpc/ping', {
+  method: 'POST',
+  headers: { apikey: CONFIG.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + CONFIG.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+  body: '{}'
+}).catch(() => {});
+
+const $ = id => document.getElementById(id);
+const TE = "'Noto Sans Telugu','Noto Sans',sans-serif";
+let photoCanvas = null;      // compressed photo (400x472)
+let photoBlob = null;        // JPEG uploaded to Supabase (~30-45 KB)
+let cardBlob = null, cardUrl = null, cardName = 'card.jpg';
+
+/* ---------- photo: crop to card ratio + compress ---------- */
+$('photo').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  photoCanvas = photoBlob = null;
+  $('thumb').textContent = 'PHOTO';
+  if (!f) return;
+  try {
+    const bmp = await createImageBitmap(f, { imageOrientation: 'from-image' });
+    const W = 400, H = 472;                         // same 210:248 ratio as the card frame
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    const s = Math.max(W / bmp.width, H / bmp.height);
+    const w = bmp.width * s, h = bmp.height * s;
+    x.drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h);
+    photoCanvas = c;
+    photoBlob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.78));
+    $('thumb').innerHTML = '';
+    const img = new Image(); img.src = URL.createObjectURL(photoBlob);
+    $('thumb').appendChild(img);
+  } catch (err) {
+    showMsg('Could not read this image. Please choose another photo.', 'err');
+  }
+});
+
+/* ---------- Supabase calls (plain fetch, no library) ---------- */
+const H = () => ({ apikey: CONFIG.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + CONFIG.SUPABASE_ANON_KEY });
+
+async function registerAttendee(name, phone, village, photoPath) {
+  const r = await fetch(CONFIG.SUPABASE_URL + '/rest/v1/rpc/register_attendee', {
+    method: 'POST',
+    headers: { ...H(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_name: name, p_phone: phone, p_village: village, p_photo_path: photoPath })
+  });
+  if (!r.ok) throw new Error('register failed: ' + r.status);
+  const rows = await r.json();
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
+async function uploadPhoto(path, blob) {
+  const r = await fetch(`${CONFIG.SUPABASE_URL}/storage/v1/object/${CONFIG.BUCKET}/${path}`, {
+    method: 'POST',
+    headers: { ...H(), 'Content-Type': 'image/jpeg', 'x-upsert': 'false' },
+    body: blob
+  });
+  if (!r.ok) throw new Error('upload failed: ' + r.status);
+}
+
+/* ---------- card drawing (672 x 1360, rendered at 2x) ---------- */
+function rr(x, px, py, w, h, r) {
+  x.beginPath();
+  x.moveTo(px + r, py);
+  x.arcTo(px + w, py, px + w, py + h, r);
+  x.arcTo(px + w, py + h, px, py + h, r);
+  x.arcTo(px, py + h, px, py, r);
+  x.arcTo(px, py, px + w, py, r);
+  x.closePath();
+}
+
+function text(x, str, px, py, size, weight, color, align, maxW, family) {
+  let s = size;
+  x.textBaseline = 'middle'; x.textAlign = align; x.fillStyle = color;
+  x.font = `${weight} ${s}px ${family || TE}`;
+  if (maxW) while (x.measureText(str).width > maxW && s > 12) { s -= 1; x.font = `${weight} ${s}px ${family || TE}`; }
+  x.fillText(str, px, py);
+  return x.measureText(str).width;
+}
+
+function drawCard({ name, phone, village, regNo }) {
+  const S = 2, W = 672, HH = 1360;
+  const c = document.createElement('canvas'); c.width = W * S; c.height = HH * S;
+  const x = c.getContext('2d'); x.scale(S, S);
+  rr(x, 0, 0, W, HH, 40); x.clip();
+
+  // body
+  x.fillStyle = '#FDF3DC'; x.fillRect(0, 0, W, HH);
+
+  // header
+  const g = x.createLinearGradient(0, 0, 0, 325);
+  g.addColorStop(0, '#3E2314'); g.addColorStop(1, '#8B3A12');
+  x.fillStyle = g; x.fillRect(0, 0, W, 325);
+  text(x, 'గోదావరి హారతి', W / 2, 62, 42, 700, '#D9B27A', 'center', 600);
+  text(x, 'సహస్ర గళ హనుమాన్ చాలీసా', W / 2, 135, 44, 700, '#F4E4C8', 'center', 620);
+  text(x, 'పారాయణం', W / 2, 212, 46, 700, '#FFF3E0', 'center', 600);
+  text(x, CONFIG.EVENT_DATE, W / 2, 282, 25, 400, '#F0C27A', 'center', 600);
+
+  // photo frame
+  const px = (W - 210) / 2, py = 348;
+  rr(x, px, py, 210, 248, 18);
+  x.fillStyle = '#F2DDB8'; x.fill();
+  if (photoCanvas) {
+    x.save(); rr(x, px, py, 210, 248, 18); x.clip();
+    x.drawImage(photoCanvas, px, py, 210, 248); x.restore();
+  }
+  rr(x, px, py, 210, 248, 18);
+  x.lineWidth = 2; x.strokeStyle = '#D4A24C'; x.stroke();
+
+  // title
+  text(x, 'PARTICIPANT DETAILS', W / 2, 647, 42, 700, '#7A2E0B', 'center', 600, "'Noto Sans',sans-serif");
+
+  // dividers + rows
+  const line = y => { x.strokeStyle = '#D9A94F'; x.lineWidth = 1.5; x.beginPath(); x.moveTo(22, y); x.lineTo(650, y); x.stroke(); };
+  line(715);
+  const row = (label, val, y, color) => {
+    text(x, label, 22, y, 30, 400, '#8B3A12', 'left');
+    const lw = x.measureText(label).width;
+    text(x, val, 650, y, 34, 700, color, 'right', 628 - lw - 20);
+  };
+  row('పేరు', name, 783, '#7A2E0B');
+  row('ఫోన్ నంబర్', phone, 872, '#1a1a1a');
+  row('గ్రామం', village, 958, '#1a1a1a');
+  line(1030);
+
+  // registration number
+  text(x, 'REGISTRATION NUMBER', W / 2, 1085, 24, 400, '#6B3A1E', 'center', 600, "'Noto Sans',sans-serif");
+  text(x, regNo, W / 2, 1150, 62, 700, '#B5500F', 'center', 600, "'Noto Sans',sans-serif");
+
+  // Jai Sri Ram + flag
+  x.font = `700 40px ${TE}`;
+  const jw = x.measureText('జై శ్రీరామ్').width, total = jw + 16 + 44, sx = (W - total) / 2;
+  text(x, 'జై శ్రీరామ్', sx, 1204, 40, 700, '#B5500F', 'left');
+  const fx = sx + jw + 16;
+  x.strokeStyle = '#9a9a9a'; x.lineWidth = 3; x.beginPath(); x.moveTo(fx + 4, 1180); x.lineTo(fx + 4, 1226); x.stroke();
+  x.fillStyle = '#E02B20'; x.beginPath(); x.moveTo(fx + 5, 1181); x.lineTo(fx + 44, 1192); x.lineTo(fx + 5, 1206); x.closePath(); x.fill();
+
+  // footer
+  x.fillStyle = '#8B3A12'; x.fillRect(0, 1290, W, 70);
+  text(x, 'గోదావరి హారతి నిర్వాహక కమిటీ', W / 2, 1326, 24, 400, '#F3D9B0', 'center', 600);
+
+  return c;
+}
+
+/* ---------- UI flow ---------- */
+function showMsg(t, kind) { const m = $('msg'); m.textContent = t; m.className = 'msg ' + kind; m.hidden = false; }
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, ch => { const r = Math.random() * 16 | 0; return (ch === 'x' ? r : (r & 3 | 8)).toString(16); }));
+
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('msg').hidden = true;
+  const name = $('name').value.trim(), phone = $('phone').value.trim(), village = $('village').value.trim();
+  if (!name || !village) return showMsg('Please fill in name and village.', 'err');
+  if (!/^[6-9][0-9]{9}$/.test(phone)) return showMsg('Enter a valid 10-digit mobile number.', 'err');
+  if (!photoBlob) return showMsg('Please add your photo.', 'err');
+
+  const btn = $('submit'); btn.disabled = true; btn.textContent = 'Please wait…';
+  try {
+    const photoPath = uuid() + '.jpg';
+    const rec = await registerAttendee(name, phone, village, photoPath);
+    let warn = '';
+    if (rec.out_already) {
+      warn = 'This phone number is already registered. Here is your existing card.';
+    } else {
+      try { await uploadPhoto(photoPath, photoBlob); }
+      catch (_) { warn = 'Registered, but the photo could not be saved on the server. Your card is still ready below.'; }
+    }
+
+    await Promise.all([
+      document.fonts.load(`700 30px "Noto Sans Telugu"`, 'శ్రీ అ'),
+      document.fonts.load(`400 30px "Noto Sans Telugu"`, 'అ'),
+      document.fonts.load(`700 30px "Noto Sans"`, 'GH-2026'),
+      document.fonts.load(`400 30px "Noto Sans"`, 'REGISTRATION')
+    ]).catch(() => {});
+
+    const canvas = drawCard({ name: rec.out_name, phone, village: rec.out_village, regNo: rec.out_reg_no });
+    cardBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+    if (cardUrl) URL.revokeObjectURL(cardUrl);
+    cardUrl = URL.createObjectURL(cardBlob);
+    cardName = rec.out_reg_no + '.jpg';
+    $('cardImg').src = cardUrl;
+
+    $('form').style.display = 'none';
+    $('result').style.display = 'block';
+    if (warn) { const p = document.createElement('p'); p.className = 'msg info'; p.textContent = warn; $('result').prepend(p); }
+    download();
+  } catch (err) {
+    console.error(err);
+    showMsg('Something went wrong. Check your internet connection and try again.', 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Register & download card';
+  }
+});
+
+function download() {
+  const a = document.createElement('a'); a.href = cardUrl; a.download = cardName;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+$('dl').addEventListener('click', download);
+$('again').addEventListener('click', () => {
+  $('result').querySelectorAll('.msg').forEach(n => n.remove());
+  $('result').style.display = 'none'; $('form').style.display = 'block';
+  $('form').reset(); photoCanvas = photoBlob = null; $('thumb').textContent = 'PHOTO';
+});
+</script>
+</body>
+</html>
